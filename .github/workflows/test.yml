@@ -52,14 +52,18 @@ jobs:
 
   update-readme:
     needs: test-and-bench
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # Only run for pushes to master in THIS repository (not forks)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && github.repository == 'Revolyssup/go-snowflake'
     runs-on: ubuntu-latest
+    # Crucial: Grant write permission for pushing
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.MY_GITHUB_TOKEN }}
 
       - name: Download benchmark artifact
         uses: actions/download-artifact@v4
@@ -71,21 +75,19 @@ jobs:
           STATUS="${{ needs.test-and-bench.outputs.test_status }}"
           BADGE="![Tests](https://img.shields.io/badge/tests-${STATUS}-brightgreen)"
 
-          # Replace or insert the test badge
           if grep -q '!\[Tests\](https://img.shields.io/badge/tests-' README.md; then
             sed -i 's|!\[Tests\](https://img.shields.io/badge/tests-[a-z]\+-brightgreen)|'"$BADGE"'|' README.md
           else
             echo -e "$BADGE\n" | cat - README.md > temp && mv temp README.md
           fi
 
-          # Append benchmark results
           echo -e "\n## Latest Benchmark Results\n" >> README.md
           cat bench.txt >> README.md
 
       - name: Commit and push changes
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add README.md
           git commit -m "Update README with test badge and benchmark results" || echo "No changes to commit"
           git push
