@@ -1,0 +1,91 @@
+name: Snowflake Test and Benchmark
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test-and-bench:
+    runs-on: ubuntu-latest
+    outputs:
+      test_status: ${{ steps.set-status.outputs.status }}
+      bench_output: ${{ steps.run-bench.outputs.bench }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run unit tests
+        id: run-tests
+        run: |
+          if go test ./...; then
+            echo "status=passing" >> $GITHUB_ENV
+          else
+            echo "status=failing" >> $GITHUB_ENV
+            exit 1
+          fi
+
+      - name: Set test status output
+        id: set-status
+        run: echo "status=${{ env.status }}" >> $GITHUB_OUTPUT
+
+      - name: Run benchmarks
+        id: run-bench
+        run: |
+          BENCH_OUTPUT=$(go test -bench=. ./idgen | tee bench.txt)
+          echo "bench<<EOF" >> $GITHUB_OUTPUT
+          echo "$BENCH_OUTPUT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Save benchmark output
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-result
+          path: bench.txt
+
+  update-readme:
+    needs: test-and-bench
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download benchmark artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-result
+
+      - name: Update README.md with badge and benchmark
+        run: |
+          STATUS="${{ needs.test-and-bench.outputs.test_status }}"
+          BADGE="![Tests](https://img.shields.io/badge/tests-${STATUS}-brightgreen)"
+
+          # Replace or insert the test badge
+          if grep -q '!\[Tests\](https://img.shields.io/badge/tests-' README.md; then
+            sed -i 's|!\[Tests\](https://img.shields.io/badge/tests-[a-z]\+-brightgreen)|'"$BADGE"'|' README.md
+          else
+            echo -e "$BADGE\n" | cat - README.md > temp && mv temp README.md
+          fi
+
+          # Append benchmark results
+          echo -e "\n## Latest Benchmark Results\n" >> README.md
+          cat bench.txt >> README.md
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add README.md
+          git commit -m "Update README with test badge and benchmark results" || echo "No changes to commit"
+          git push
