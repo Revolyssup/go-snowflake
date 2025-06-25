@@ -1,7 +1,6 @@
 # go-snowflake
 
 Implementation of twitter's snowflake algorithm for generating UUIDs for distributed systems.
-Inspired from: https://github.com/tangledbytes/nodejs-snowflake/blob/master/README.md
 
 
 ## Usage
