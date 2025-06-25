@@ -36,3 +36,11 @@ cpu: 13th Gen Intel(R) Core(TM) i7-1360P
 BenchmarkIDGen-16       22185558                45.39 ns/op
 PASS
 ```
+
+### Reasoning behind throwing error in case of rate limit as opposed to internal retries
+
+- If for a given timestamp the sequence number has overflown then the only way to reliably return an id is by incrementing the timestamp+1 but I think
+this is non intuitive and inaccurate.
+- Blocking requests in case of rate limit hides the behavious from client and in case of uncontrolled requests might lead to unexpected behavior.
+- Allowing clients to control what happens in case of rate limit allows more control to clients: They may have their own retry mechanism which is best suited
+to their system.
