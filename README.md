@@ -24,3 +24,15 @@ id, err := snowflake.GetUUID()
 - The implementation is go routine safe
 - The error returned is "Rate limit exceeded" and it is upto the client to handle this case.
 ```
+
+## Benchmark
+
+```bash
+ go test -bench=. ./idgen
+goos: linux
+goarch: amd64
+pkg: github.com/Revolyssup/go-snowflake/idgen
+cpu: 13th Gen Intel(R) Core(TM) i7-1360P
+BenchmarkIDGen-16       22185558                45.39 ns/op
+PASS
+```
