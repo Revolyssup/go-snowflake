@@ -1,9 +1,9 @@
 package idgen
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -21,10 +21,17 @@ custom_timestamp time.Time
 12 bit seq no
 
 Either we can support more nodes or higher rate. I opt here for higher rate and give more bits to sequence number as a result.
-Can generate 4096 unique IDs per millisecond per machine
-snowflake.GetUUIDForTimestamp() (instead of time.Now converted to 41 bit unix ms, this will be converted)
-Impl: using Twitter's Snowflake spec.
+Can generate 4096 unique IDs per millisecond per machine.
+For simplicity, accuracy, predictability and speed the function fast-fails when rate limit is exceeded allowing clients to decide the next move.
+*REASONING BEHIND IT:
+*If for a given timestamp the sequence number has overflown then the only way to reliably return an id is by incrementing the timestamp+1 but I think
+*this is non intuitive and inaccurate.
+
+*Blocking requests in case of rate limit hides the behavious from client and in case of uncontrolled requests might lead to unexpected behavior.
+*Allowing clients to control what happens in case of rate limit allows more control to clients: They may have their own retry mechanism which is best suited
+*to their system.
 */
+var ErrRateLimitExceeded = fmt.Errorf("rate limit exceeded. try after a millisecond")
 
 type SnowflakeConfig struct {
 	InstanceID      uint16
@@ -35,7 +42,7 @@ type Snowflake struct {
 	instanceId      uint16
 	customtimestamp *time.Time
 	sequenceNumber  uint32
-	state           uint64
+	lasttimestamp   uint64
 	mx              sync.Mutex
 }
 
@@ -47,12 +54,6 @@ const (
 	SequenceNumberMask = (1<<12 - 1)
 )
 
-func (sf *Snowflake) setSeqNumber() {
-	timer := time.NewTicker(time.Millisecond)
-	for range timer.C {
-		atomic.SwapUint32(&sf.sequenceNumber, 0)
-	}
-}
 func NewSnowflake(conf *SnowflakeConfig) *Snowflake {
 	if conf == nil {
 		conf = &SnowflakeConfig{
@@ -65,11 +66,10 @@ func NewSnowflake(conf *SnowflakeConfig) *Snowflake {
 		customtimestamp: conf.CustomTimestamp,
 		mx:              sync.Mutex{},
 	}
-	go sf.setSeqNumber()
 	return sf
 }
 
-func (sf *Snowflake) GetUUID() uint64 {
+func (sf *Snowflake) GetUUID() (uint64, error) {
 	var timestamp time.Time
 	if sf.customtimestamp == nil {
 		timestamp = time.Now()
@@ -80,19 +80,30 @@ func (sf *Snowflake) GetUUID() uint64 {
 	return sf.GetUUIDForTimestamp(timestamp)
 }
 
-func (sf *Snowflake) GetUUIDForTimestamp(timestamp time.Time) uint64 {
-BEGIN:
-	oldstate := atomic.LoadUint64(&sf.state)
+func (sf *Snowflake) GetUUIDForTimestamp(timestamp time.Time) (uint64, error) {
+	sf.mx.Lock()
+	defer sf.mx.Unlock()
 	var ts, id, sn uint64
 	ts = (uint64(timestamp.UnixMilli()&TimestampMask) << TimestampShift)
+	defer func() {
+		sf.lasttimestamp = ts
+	}()
 	id = ((uint64(sf.instanceId)) & InstanceIDMask) << InstanceIDShift
-	newSeq := atomic.AddUint32(&sf.sequenceNumber, 1)
-	sn = (uint64(newSeq) & SequenceNumberMask)
-	state := ts | id | sn
-	if atomic.CompareAndSwapUint64(&sf.state, oldstate, state) {
-		return state
+	sn = (uint64(sf.sequenceNumber) & SequenceNumberMask)
+	if sn == SequenceNumberMask { //overflow
+		sf.sequenceNumber = 0
+		if ts == sf.lasttimestamp {
+			return 0, ErrRateLimitExceeded
+		}
 	} else {
-		time.Sleep(time.Millisecond) // To avoid spinlock
-		goto BEGIN
+		sf.sequenceNumber++
 	}
+	state := ts | id | sn
+	return state, nil
+}
+
+// This will return an approximate value of time with ms accuracy
+func (sf *Snowflake) GetTimestampForUUID(uuid uint64) time.Time {
+	ts := (uuid >> TimestampShift)
+	return time.UnixMilli(int64(ts))
 }
